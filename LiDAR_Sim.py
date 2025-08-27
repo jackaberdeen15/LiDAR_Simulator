@@ -52,19 +52,25 @@ def photon_numbers_scene(data, R, ref, SPAD_dist, ambient):
     Penergy = h * c / data["lambdae"] #energy of a photon in J
     Wbckg=0.4*ambient / 100e3 # solar background at 940 nm
     
+    # mask for valid surfaces
+    mask = R > 0
+    
+    #prevent divide by zero or exp(inf) by safely replacing 0s
+    R_safe = np.where(mask, R, 1.0)
+    
     # estimate the number of incident signal photons per surface per SPAD
-    Psource = data["Epulse"] * np.exp(-2*R/Catm) * ref * data["PDP"] * data["FF"] * data["Apix"] / 8 / Fnum**2 / np.pi / R**2 / np.tan(data["thetae"])**2
+    Psource = data["Epulse"] * np.exp(-2*R_safe/Catm) * ref * data["PDP"] * data["FF"] * data["Apix"] / 8 / Fnum**2 / np.pi / R_safe**2 / np.tan(data["thetae"])**2
     Psource = Psource / Penergy
     
     Psig = Psource * SPAD_dist / data["SPADnum"]
     
     # estimate the number of incident noise photons per surface per SPAD (from ambient and DCR)
-    Pback = Wbckg * np.exp(-R/Catm) * ref * data["PDP"] * data["FF"] * data["Apix"] / 8 / Fnum**2
+    Pback = Wbckg * np.exp(-R_safe/Catm) * ref * data["PDP"] * data["FF"] * data["Apix"] / 8 / Fnum**2
     Pback = Pback * data["Bin_width"] * data["Bin_num"] / Penergy
 
     Pnoise = Pback * SPAD_dist / data["SPADnum"] + data["DCR"] * data["Bin_width"] * data["Bin_num"]
     
-    return Psig, Pnoise
+    return np.where(mask,Psig,0.0), np.where(mask, Pnoise, 0.0)
 
 def photon_numbers_batch(data, R_list, ref_list, SPAD_list, ambient):
     return zip(*[photon_numbers_scene(data, R, ref, SPAD_dist, ambient)
