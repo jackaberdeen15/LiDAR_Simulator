@@ -13,25 +13,38 @@ import json
 import numpy as np
 
 
-def generate_scene_conditions(data):
+def generate_scene_conditions(data, batch_size):
     
     Rmax = data["Bin_num"] * data["Bin_width"] * 3e8 / 2
+    batch_R = []
+    batch_ref = []
+    batch_SPAD_dist = []
     
-    # generate surfaces (max four) to be present in macropixel 
-    R = np.random.random((np.random.randint(1,5)))*Rmax
-    ref = np.random.random((len(R)))
-
-    # distribute SPADs among the surfaces (each SPAD can only see one surface for simplicity)
-    # generate n-1 unique split points between 1 and total SPAD number - 1
-    splits = np.sort(np.random.choice(range(1, data["SPADnum"]), size=len(R)-1, replace=False))
-
-    # add 0 and total SPAD number to the ends of the splits list and compute differences between points
-    SPAD_dist = np.diff([0] + splits.tolist() + [data["SPADnum"]])
+    max_spad = data["SPADnum"]
     
-    return R, ref, SPAD_dist
+    for _ in range(batch_size):
+        # generate surfaces (max four) to be present in macropixel 
+        R = np.random.random((np.random.randint(1,5)))*Rmax
+        ref = np.random.random((len(R)))
+        
+        if len(R)==1:
+            SPAD_dist = np.array([max_spad])
+        else:
+            # distribute SPADs among the surfaces (each SPAD can only see one surface for simplicity)
+            # generate n-1 unique split points between 1 and total SPAD number - 1
+            splits = np.sort(np.random.choice(range(1, max_spad), size=len(R)-1, replace=False))
+        
+            # add 0 and total SPAD number to the ends of the splits list and compute differences between points
+            SPAD_dist = np.diff([0] + splits.tolist() + [max_spad])
+        
+        batch_R.append(R)
+        batch_ref.append(ref)
+        batch_SPAD_dist.append(SPAD_dist)
+    
+    return batch_R, batch_ref, batch_SPAD_dist
 
-def photon_numbers(data, R, ref, SPAD_dist, ambient):
-    h = 3.626e-34 # plancks constant in Js
+def photon_numbers_scene(data, R, ref, SPAD_dist, ambient):
+    h = 6.626e-34 # plancks constant in Js
     c = 3e8 # speed of light in m/s
     Catm = 10e3 # atmospheric attenuation length in meters
     #Ptx = 0.94 * data["Epulse"] / data["Tpulse"]
@@ -39,30 +52,31 @@ def photon_numbers(data, R, ref, SPAD_dist, ambient):
     Penergy = h * c / data["lambdae"] #energy of a photon in J
     Wbckg=0.4*ambient / 100e3 # solar background at 940 nm
     
-    Psig = []
-    Pnoise = []
+    # estimate the number of incident signal photons per surface per SPAD
+    Psource = data["Epulse"] * np.exp(-2*R/Catm) * ref * data["PDP"] * data["FF"] * data["Apix"] / 8 / Fnum**2 / np.pi / R**2 / np.tan(data["thetae"])**2
+    Psource = Psource / Penergy
     
-    # estimate signal and noise photon numbers for each surface within macropixel
-    for i in range(len(R)):
-        Psource = data["Epulse"] * np.exp(-2*R[i]/Catm) * ref[i] * data["PDP"] * data["FF"] * data["Apix"] / 8 / Fnum**2 / np.pi / R[i]**2 / np.tan(data["thetae"])**2
-        Psource = Psource / Penergy
-        
-        Psig.append(float(Psource * SPAD_dist[i] / data["SPADnum"]))
+    Psig = Psource * SPAD_dist / data["SPADnum"]
     
-        Pback = Wbckg * np.exp(-R[i]/Catm) * ref[i] * data["PDP"] * data["FF"] * data["Apix"] / 8 / Fnum**2
-        Pback = Pback * data["Bin_width"] * data["Bin_num"] / Penergy
-    
-        Pnoise.append(float(Pback * SPAD_dist[i] / data["SPADnum"] + data["DCR"] * data["Bin_width"] * data["Bin_num"]))
+    # estimate the number of incident noise photons per surface per SPAD (from ambient and DCR)
+    Pback = Wbckg * np.exp(-R/Catm) * ref * data["PDP"] * data["FF"] * data["Apix"] / 8 / Fnum**2
+    Pback = Pback * data["Bin_width"] * data["Bin_num"] / Penergy
+
+    Pnoise = Pback * SPAD_dist / data["SPADnum"] + data["DCR"] * data["Bin_width"] * data["Bin_num"]
     
     return Psig, Pnoise
+
+def photon_numbers_batch(data, R_list, ref_list, SPAD_list, ambient):
+    return zip(*[photon_numbers_scene(data, R, ref, SPAD_dist, ambient)
+                 for R, ref, SPAD_dist in zip(R_list, ref_list, SPAD_list)])
 
 #Load SPAD-based LiDAR parameters from .json
 with open("LiDAR_params.json","r") as file:
     data = json.load(file)
 
-R, ref, SPAD_dist = generate_scene_conditions(data)
+R, ref, SPAD_dist = generate_scene_conditions(data,10)
 
-Psig, Pnoise = photon_numbers(data,R,ref,SPAD_dist,20e3)
+Psig, Pnoise = photon_numbers_batch(data,R,ref,SPAD_dist,20e3)
 
 print(Psig)
 print(Pnoise)
