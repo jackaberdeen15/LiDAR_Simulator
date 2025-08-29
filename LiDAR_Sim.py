@@ -19,7 +19,7 @@ dt = 50e-12
 
 def generate_scene_conditions(data, batch_size):
     
-    Rmax = data["Bin_num"] * data["Bin_width"] * 3e8 / 2
+    Rmax = 20#data["Bin_num"] * data["Bin_width"] * 3e8 / 2
     batch_R = []
     batch_ref = []
     batch_SPAD_dist = []
@@ -102,7 +102,7 @@ def SPAD_Pulse_Model(data, timestamps):
             Pulse[t:t+Tdead] = 1.0
     return Pulse
 
-def timestamp_generation_cycle(data, Psig, Pnoise, SPAD_dist, pdf):
+def histogram_generation_cycle(data, R, Psig, Pnoise, pdf):
     c = 3e8 # speed of light in m/s
     Laser_cycles = data["Laser_cycles"]
     Tpulse = data["Tpulse"]
@@ -121,13 +121,13 @@ def timestamp_generation_cycle(data, Psig, Pnoise, SPAD_dist, pdf):
 
     for i in range(N_SPADs):
         # Scale signal pulse shape to photon rate per bin
-        sig_rate = pdf * Psig_s[2, i]
+        sig_rate = pdf * Psig[i]
 
         # Generate signal photons with Poisson draw
         sig_counts = np.random.poisson(sig_rate)
 
         # Time delay due to range
-        tof = 2 * R_s[2, i] / c   # in seconds
+        tof = 2 * R[i] / c   # in seconds
         shift_bins = int(tof / dt - pulse_bins / 2)
 
         # Shift signal into histogram
@@ -139,7 +139,7 @@ def timestamp_generation_cycle(data, Psig, Pnoise, SPAD_dist, pdf):
         tstmp_buffer[i, start:end] += sig_counts
 
         # Add ambient noise uniformly across entire cycle
-        ambient_rate = Pnoise_s[2, i] / cycle_len
+        ambient_rate = Pnoise[i] / cycle_len
         noise_counts = np.random.poisson(ambient_rate, size=cycle_len)
         tstmp_buffer[i] += noise_counts
         
@@ -151,12 +151,22 @@ def timestamp_generation_cycle(data, Psig, Pnoise, SPAD_dist, pdf):
     
     return Hist
 
-def timestamp_generation_exposure(data, Psig_batch, Pnoise_batch, SPAD_dist_batch):
+def histogram_generation_exposure(data, R_s_batch, Psig_batch, Pnoise_batch):
+    batch_size = len(Psig_batch)
+    Histograms = np.zeros((batch_size,data["Bin_num"]))
+    cycle_num = data["Laser_cycles"]
+    
     samples = np.linspace(-data["Tpulse"],data["Tpulse"], int(2*data["Tpulse"] / dt))
     pdf = scipy.stats.norm.pdf(samples, 0, data["Tpulse"]/2.355)
-
+    
     # normalise pdf
     pdf /= np.sum(pdf)
+    
+    for b in range(batch_size):
+        for cycle in range(cycle_num):
+            Histograms[b] += histogram_generation_cycle(data, R_s_batch[b], Psig_batch[b], Pnoise_batch[b], pdf)
+    
+    return Histograms
 
 #def timestamp_generation_batch(data, Psig_batch, Pnoise_batch, SPAD_dist_batch):
     
@@ -165,144 +175,16 @@ def timestamp_generation_exposure(data, Psig_batch, Pnoise_batch, SPAD_dist_batc
 with open("LiDAR_params.json","r") as file:
     data = json.load(file)
 
-R, ref, SPAD_dist = generate_scene_conditions(data,10)
+R_batch, ref_batch, SPAD_dist_batch = generate_scene_conditions(data,2)
 
-Psig, Pnoise = photon_numbers_batch(data,R,ref, SPAD_dist, 20e3)
+Psig_batch, Pnoise_batch = photon_numbers_batch(data,R_batch,ref_batch, SPAD_dist_batch, 20e3)
 
-Psig_s, Pnoise_s, R_s = expand_to_SPADs(data, Psig, Pnoise, R, SPAD_dist)
+Psig_s_batch, Pnoise_s_batch, R_s_batch = expand_to_SPADs(data, Psig_batch, Pnoise_batch, R_batch, SPAD_dist_batch)
 
+histograms = histogram_generation_exposure(data, R_s_batch, Psig_s_batch, Pnoise_s_batch)
 
-samples = np.linspace(-data["Tpulse"],data["Tpulse"], int(2*data["Tpulse"] / dt))
-pdf = scipy.stats.norm.pdf(samples, 0, data["Tpulse"]/2.355)
-
-# normalise pdf
-pdf /= np.sum(pdf)
-tstamp_res = timestamp_generation_cycle(data, Psig, Pnoise, SPAD_dist, pdf)
-
-print(np.sum(tstamp_res))
-#print(Psig)
-#print(Pnoise)
-
-# draft dead time model
-# Tdead_remaining = 0
-# is_dead = False
-
-# for t in range(len(tstmp_buffer[i])):
-#     if tstmp_buffer[i,t] > 0:
-#         if is_dead:
-#             Tdead_remaining = Tdead
-#             tstmp_buffer[i,t] = 0
-#         else:
-#             is_dead = True
-#             Tdead_remaining = Tdead
-#     if Tdead_remaining > 0:
-#         Tdead_remaining -= 1
-#     else:
-#         is_dead = False
-
-#%%
-
-samples = np.linspace(-data["Tpulse"] / dt ,data["Tpulse"] / dt, int(2*data["Tpulse"] / dt / 10 +1))
-dist = scipy.stats.norm(0, data["Tpulse"] / dt /2.355)
-pdf = dist.pdf(samples)
-
-# normalise pdf
-pdf /= np.sum(pdf)
-
-c = 3e8 # speed of light in m/s
-Laser_cycles = data["Laser_cycles"]
-Tpulse = 2*data["Tpulse"]
-Bin_num = data["Bin_num"]
-Bin_width = data["Bin_width"]
-N_SPADs = data["SPADnum"]
-cycle_len = int(Bin_num*Bin_width / dt)
-Tdead = int(data["Tdead"]/dt)
-
-Hist = np.zeros((Bin_num,), dtype=np.uint16)
-
-sig_tstmp_buffer = np.zeros((N_SPADs,int(Tpulse / dt)))
-tstmp_buffer = np.zeros((N_SPADs,cycle_len))
-tstmp_buffer_merged = np.zeros((cycle_len,))
-
-# generate timestamps per laser cycle, then allocate to histogram which is kept between laser cycles as in
-# real systems
-# generate timestamps (up to 100 per laser cycle for both sig and noise, more is not needed?) from these
-# timesteps, the histogram can be incremented
-
-sel = 0
-
-for i in range(N_SPADs):
-    rate = pdf * Psig_s[sel,i]
-    
-    for j in range(len(rate)-1):
-        bin_rate = (rate[j] + rate[j+1]) / 2 #interpolate between bin edges
-        sig_tstmp_buffer[i,j*10:j*10+10] = np.random.poisson(bin_rate/10,(10,))
-    #sig_tstmp_buffer[i] = np.random.poisson(rate)
-    # add ambient
-    tstmp_buffer[i] = np.random.poisson(Pnoise_s[sel,i]/cycle_len, cycle_len)
-    
-    surface_index = int(R_s[sel,i] *2 / c / dt)
-    
-    tstmp_buffer[i,surface_index:surface_index+sig_tstmp_buffer.shape[-1]] += sig_tstmp_buffer[i]
-    
-    
-
-tstmp_buffer_merged = np.sum(tstmp_buffer,0)
-
-print(R[sel])
-print(ref[sel])
-print(np.sum(Psig[sel]))
-print(np.sum(sig_tstmp_buffer))
-print(np.sum(Pnoise[sel]))
-print(np.sum(tstmp_buffer))
-
-#%%
-
-# Constants
-N_SPADs = 16
-cycle_len = 1024             # number of histogram bins
-dt = 10e-12                  # 10 ps resolution
-c = 3e8
-pulse_bins = 2*int(data["Tpulse"] / data["Bin_width"])           # pulse length in bins
-
-# Assume these are already defined for sel-th scene:
-# Psig_s[sel, i], Pnoise_s[sel, i], R_s[sel, i]
-# Also assume you have a Gaussian pulse shape
-pulse_shape = pdf / np.sum(pdf)  # normalized, e.g., shape (1000,)
-
-# Initialize buffers
-tstmp_buffer = np.zeros((N_SPADs, cycle_len), dtype=int)
-
-for i in range(N_SPADs):
-    # Scale signal pulse shape to photon rate per bin
-    sig_rate = pulse_shape * Psig_s[sel, i]
-
-    # Generate signal photons with Poisson draw
-    sig_counts = np.random.poisson(sig_rate)
-
-    # Time delay due to range
-    tof = 2 * R_s[sel, i] / c   # in seconds
-    shift_bins = int(tof / dt)
-
-    # Shift signal into histogram
-    start = shift_bins
-    end = shift_bins + pulse_bins
-    if end > cycle_len:
-        end = cycle_len
-        sig_counts = sig_counts[:end - start]  # truncate to fit
-    tstmp_buffer[i, start:end] += sig_counts
-
-    # Add ambient noise uniformly across entire cycle
-    ambient_rate = Pnoise_s[sel, i] / cycle_len
-    noise_counts = np.random.poisson(ambient_rate, size=cycle_len)
-    tstmp_buffer[i] += noise_counts
-
-# Merge all SPADs
-tstmp_buffer_merged = np.sum(tstmp_buffer, axis=0)
-
-print(R[sel])
-print(ref[sel])
-print(np.sum(Psig[sel]))
-print(np.sum(sig_tstmp_buffer))
-print(np.sum(Pnoise[sel]))
-print(np.sum(tstmp_buffer))
+print(R_batch[0])
+print(ref_batch[0])
+print(Psig_batch[0])
+print(Pnoise_batch[0])
+print(np.sum(histograms[0]))
