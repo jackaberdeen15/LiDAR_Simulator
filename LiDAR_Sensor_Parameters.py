@@ -16,6 +16,7 @@ Lidar = {
     "Tdead" : 5e-9, # SPAD dead time
     "DCR" : 6.8e3, #Dark Count Rate Hz
     "SPADnum" : 16, #Number of SPADs per macropixel
+    "QuenchType" : "passive", # quench type of the SPADs
     
     # Emitter Parameters
     "lambdae" : 940e-9, #Laser wavelength m
