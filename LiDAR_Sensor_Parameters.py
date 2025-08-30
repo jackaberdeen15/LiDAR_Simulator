@@ -34,7 +34,7 @@ Lidar = {
     "Bin_num" : 512, # number of bins in histogram
     "Bin_width" : 1e-9, # temporal width of histogram bins
     "Jitter" : 100e-12, #System jitter s
-    "Laser_cycles" : 24000 # number of laser cycles per exposure
+    "Laser_cycles" : 10 # number of laser cycles per exposure
     
     }
 
