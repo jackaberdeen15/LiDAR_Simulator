@@ -16,7 +16,7 @@ sim = LiDARSimulator.LiDARSimulator("LiDAR_params.json")
 
 R_batch, ref_batch, SPAD_dist_batch = sim.generate_scene(10)
 
-Psig, Pnoise = sim.photon_numbers(R_batch, ref_batch, SPAD_dist_batch, 20e3)
+Psig, Pnoise = sim.photon_numbers(R_batch, ref_batch, 20e3)
 
 Psig_SPAD, Pnoise_SPAD, R_SPAD = sim.expand_to_SPADs(Psig, Pnoise,  R_batch, SPAD_dist_batch)
 
